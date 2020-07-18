@@ -12,7 +12,7 @@ import (
 )
 
 // Waits until prepared zip file is ready at putio
-func (a *app) waitForZip(ctx context.Context, client *putio.Client, zipID int64) (*putio.Zip, error) {
+func (a *app) waitForZip(ctx context.Context, zipID int64) (*putio.Zip, error) {
 	ticker := time.NewTimer(0)
 	defer ticker.Stop()
 
@@ -21,7 +21,7 @@ func (a *app) waitForZip(ctx context.Context, client *putio.Client, zipID int64)
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-ticker.C:
-			zip, err := client.Zips.Get(context.Background(), zipID)
+			zip, err := a.client.Zips.Get(context.Background(), zipID)
 			if err != nil {
 				return nil, err
 			}
@@ -36,7 +36,7 @@ func (a *app) waitForZip(ctx context.Context, client *putio.Client, zipID int64)
 }
 
 // Waits until deletion of remote file succeeds to avoid duplicate downloads
-func (a *app) waitForDelete(ctx context.Context, client *putio.Client, fileID int64) error {
+func (a *app) waitForDelete(ctx context.Context, fileID int64) error {
 	ticker := time.NewTimer(0)
 	defer ticker.Stop()
 
@@ -45,7 +45,7 @@ func (a *app) waitForDelete(ctx context.Context, client *putio.Client, fileID in
 		case <-ctx.Done():
 			return fmt.Errorf("failed to delete file before timeout, %v", ctx.Err())
 		case <-ticker.C:
-			err := client.Files.Delete(context.Background(), fileID)
+			err := a.client.Files.Delete(context.Background(), fileID)
 			if err != nil {
 				log.Println(err)
 				ticker.Reset(5 * time.Second)
@@ -57,17 +57,17 @@ func (a *app) waitForDelete(ctx context.Context, client *putio.Client, fileID in
 	}
 }
 
-func (a *app) fetchRemoteFile(client *putio.Client, file putio.File) error {
+func (a *app) fetchRemoteFile(file putio.File) error {
 	a.logger.Info("found " + file.Name)
 	zipfile := file.Name + ".zip"
-	zipID, err := client.Zips.Create(context.Background(), file.ID)
+	zipID, err := a.client.Zips.Create(context.Background(), file.ID)
 	if err != nil {
 		return err
 	}
 
 	zipCtx, zipCancelFn := context.WithTimeout(context.TODO(), time.Minute)
 	defer zipCancelFn()
-	zip, err := a.waitForZip(zipCtx, client, zipID)
+	zip, err := a.waitForZip(zipCtx, zipID)
 	if err != nil {
 		return err
 	}
@@ -85,7 +85,7 @@ func (a *app) fetchRemoteFile(client *putio.Client, file putio.File) error {
 	a.logger.Debug("Finished downloading. Deleting file.")
 	deleteCtx, deleteCancelFn := context.WithTimeout(context.TODO(), time.Minute)
 	defer deleteCancelFn()
-	err = a.waitForDelete(deleteCtx, client, file.ID)
+	err = a.waitForDelete(deleteCtx, file.ID)
 	if err != nil {
 		return err
 	}
