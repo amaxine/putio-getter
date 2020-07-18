@@ -30,20 +30,22 @@ type app struct {
 const putioRootDir = 0
 
 func (a *app) fetch() {
+	err := a.client.Transfers.Clean(context.Background())
+	if err != nil {
+		a.logger.Error("failed to clean transfers", "error", err)
+		return
+	}
+
 	list, root, err := a.client.Files.List(context.Background(), putioRootDir)
 	if err != nil {
 		a.logger.Error("can't list files in root directory", "error", err)
 		return
 	}
 
-	err = a.client.Transfers.Clean(context.Background())
-	if err != nil {
-		a.logger.Error("failed to clean transfers", "error", err)
-		return
-	}
+	a.logger.Debug("checking for new files", "directory.name", root.Name, "found.count", len(list))
 
-	a.logger.Debug("looking for new files in " + root.Name)
 	for _, element := range list {
+		a.logger.Debug("attempting to download remote file", "file.name", element.Name)
 		ctx, cancelFn := context.WithCancel(context.Background())
 		err = a.fetchRemoteFile(ctx, element)
 		cancelFn()
