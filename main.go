@@ -44,7 +44,9 @@ func (a *app) fetch() {
 
 	a.logger.Debug("looking for new files in " + root.Name)
 	for _, element := range list {
-		err = a.fetchRemoteFile(element)
+		ctx, cancelFn := context.WithCancel(context.Background())
+		err = a.fetchRemoteFile(ctx, element)
+		cancelFn()
 		if err != nil {
 			a.logger.Error("failed to fetch remote file", "error", err)
 			return

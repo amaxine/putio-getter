@@ -57,15 +57,15 @@ func (a *app) waitForDelete(ctx context.Context, fileID int64) error {
 	}
 }
 
-func (a *app) fetchRemoteFile(file putio.File) error {
+func (a *app) fetchRemoteFile(ctx context.Context, file putio.File) error {
 	a.logger.Info("found " + file.Name)
 	zipfile := file.Name + ".zip"
-	zipID, err := a.client.Zips.Create(context.Background(), file.ID)
+	zipID, err := a.client.Zips.Create(ctx, file.ID)
 	if err != nil {
 		return err
 	}
 
-	zipCtx, zipCancelFn := context.WithTimeout(context.TODO(), time.Minute)
+	zipCtx, zipCancelFn := context.WithTimeout(ctx, time.Minute)
 	defer zipCancelFn()
 	zip, err := a.waitForZip(zipCtx, zipID)
 	if err != nil {
@@ -83,7 +83,7 @@ func (a *app) fetchRemoteFile(file putio.File) error {
 	}
 
 	a.logger.Debug("Finished downloading. Deleting file.")
-	deleteCtx, deleteCancelFn := context.WithTimeout(context.TODO(), time.Minute)
+	deleteCtx, deleteCancelFn := context.WithTimeout(ctx, time.Minute)
 	defer deleteCancelFn()
 	err = a.waitForDelete(deleteCtx, file.ID)
 	if err != nil {
