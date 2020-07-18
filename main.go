@@ -23,9 +23,13 @@ type app struct {
 	logger hclog.Logger
 }
 
+// putioRootDir is the directory that we will pull files to download from.
+// 0 is a magic value that always corresponds to the current accounts `/` dir,
+// but other directories are non-sequential.
+const putioRootDir = 0
+
 func (a *app) fetch(client *putio.Client) {
-	const rootDir = 0
-	list, root, err := client.Files.List(context.Background(), rootDir)
+	list, root, err := client.Files.List(context.Background(), putioRootDir)
 	if err != nil {
 		a.logger.Error("can't list files in root directory", "error", err)
 		return
