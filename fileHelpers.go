@@ -57,6 +57,7 @@ func unzip(dst string, src string) error {
 
 		in, err := f.Open()
 		if err != nil {
+			out.Close()
 			return err
 		}
 
