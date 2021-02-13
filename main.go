@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-hclog"
-	"github.com/putdotio/go-putio"
-	"golang.org/x/oauth2"
+	"github.com/maxeaubrey/putio-getter/putio"
+	goputio "github.com/putdotio/go-putio"
 )
 
 type config struct {
@@ -21,36 +21,37 @@ type config struct {
 type app struct {
 	conf   config
 	logger hclog.Logger
-	client *putio.Client
+	client *putio.Putio
 }
 
-// putioRootDir is the directory that we will pull files to download from.
-// 0 is a magic value that always corresponds to the current accounts `/` dir,
-// but other directories are non-sequential.
-const putioRootDir = 0
+func (a *app) fetchAndUnzipFile(ctx context.Context, file goputio.File) error {
+	ctx, cancelFn := context.WithCancel(ctx)
+	defer cancelFn()
 
-func (a *app) fetch() {
-	err := a.client.Transfers.Clean(context.Background())
+	zipfile, err := a.fetchRemoteFile(ctx, file)
+	if err != nil {
+		return err
+	}
+
+	return a.unzipZipfile(zipfile)
+}
+
+func (a *app) downloadAll(ctx context.Context) {
+	err := a.client.CleanTransfers(ctx)
 	if err != nil {
 		a.logger.Error("failed to clean transfers", "error", err)
 		return
 	}
 
-	list, root, err := a.client.Files.List(context.Background(), putioRootDir)
+	list, err := a.client.FetchList(ctx)
 	if err != nil {
 		a.logger.Error("can't list files in root directory", "error", err)
 		return
 	}
 
-	a.logger.Debug("checking for new files", "directory.name", root.Name, "found.count", len(list))
-
 	for _, element := range list {
-		a.logger.Debug("attempting to download remote file", "file.name", element.Name)
-		ctx, cancelFn := context.WithCancel(context.Background())
-		err = a.fetchRemoteFile(ctx, element)
-		cancelFn()
+		err := a.fetchAndUnzipFile(ctx, element)
 		if err != nil {
-			a.logger.Error("failed to fetch remote file", "error", err)
 			return
 		}
 	}
@@ -62,36 +63,33 @@ func main() {
 		Level: hclog.LevelFromString("DEBUG"),
 	})
 
-	configuration, err := readConfig()
+	cfg, err := readConfig()
 	if err != nil {
 		logger.Error("failed to read configuration", "error", err)
 		os.Exit(1)
 	}
-	err = validateConfig(configuration)
+	err = validateConfig(cfg)
 	if err != nil {
 		logger.Error("failed to validate configuration", "error", err)
 		os.Exit(1)
 	}
 
-	logger.SetLevel(hclog.LevelFromString(configuration.LogLevel))
+	logger.SetLevel(hclog.LevelFromString(cfg.LogLevel))
 
-	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: configuration.OauthToken})
-	oauthClient := oauth2.NewClient(oauth2.NoContext, tokenSource)
-	interval, err := time.ParseDuration(configuration.Interval)
-
-	client := putio.NewClient(oauthClient)
+	putio := putio.New(cfg.OauthToken)
+	interval, _ := time.ParseDuration(cfg.Interval)
 
 	a := app{
 		logger: logger,
-		conf:   *configuration,
-		client: client,
+		conf:   *cfg,
+		client: putio,
 	}
 
 	ticker := time.NewTimer(0)
 	for {
 		select {
 		case <-ticker.C:
-			a.fetch()
+			a.downloadAll(context.Background())
 			ticker.Reset(interval)
 		}
 	}
