@@ -4,13 +4,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	goputio "github.com/putdotio/go-putio"
 )
 
 func (a *app) fetchRemoteFile(ctx context.Context, file goputio.File) (string, error) {
-	a.logger.Info("found " + file.Name)
 	zipfile := file.Name + ".zip"
 
 	zipCtx, zipCancelFn := context.WithTimeout(ctx, time.Minute)
@@ -20,13 +20,13 @@ func (a *app) fetchRemoteFile(ctx context.Context, file goputio.File) (string, e
 		return "", err
 	}
 
-	a.logger.Debug("Fetching file", "file", file.Name, "url", zip.URL)
+	a.logger.Info("downloading file", "file", file.Name, "ID", file.ID)
 	err = downloadFile(filepath.Join(a.conf.Downloading, zipfile), zip.URL)
 	if err != nil {
 		return "", err
 	}
 
-	a.logger.Debug("Finished downloading. Deleting file.")
+	a.logger.Info("deleting file", "file", file.Name, "ID", file.ID)
 	deleteCtx, deleteCancelFn := context.WithTimeout(ctx, time.Minute)
 	defer deleteCancelFn()
 	err = a.client.DeleteFile(deleteCtx, file.ID)
@@ -38,12 +38,17 @@ func (a *app) fetchRemoteFile(ctx context.Context, file goputio.File) (string, e
 }
 
 func (a *app) unzipZipfile(zipfile string) error {
-	err := unzip(a.conf.Unpacking, filepath.Join(a.conf.Downloading, zipfile))
+	sourcePath := filepath.Join(a.conf.Downloading, zipfile)
+	destPath := filepath.Join(a.conf.Unpacking, strings.TrimSuffix(zipfile, ".zip"))
+
+	a.logger.Info("unzipping file", "source", sourcePath, "dest", destPath)
+	err := unzip(destPath, sourcePath)
 	if err != nil {
 		return err
 	}
 
-	err = os.Remove(filepath.Join(a.conf.Downloading, zipfile))
+	a.logger.Info("removing zip file", "path", sourcePath)
+	err = os.Remove(sourcePath)
 	if err != nil {
 		return err
 	}

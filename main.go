@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/go-hclog"
@@ -22,18 +23,59 @@ type app struct {
 	conf   config
 	logger hclog.Logger
 	client *putio.Putio
+
+	files     map[int64]goputio.File
+	filesMu   sync.Mutex
+	filesGC   map[int64]goputio.File
+	filesGCMu sync.Mutex
+
+	downloadCh chan goputio.File
+	unzipCh    chan string
 }
 
-func (a *app) fetchAndUnzipFile(ctx context.Context, file goputio.File) error {
+func (a *app) runDownloadWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case file := <-a.downloadCh:
+			a.fetchFile(ctx, file)
+		}
+	}
+}
+
+func (a *app) runUnzipWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case file := <-a.unzipCh:
+			a.unzipFile(ctx, file)
+		}
+	}
+}
+
+func (a *app) fetchFile(ctx context.Context, file goputio.File) {
 	ctx, cancelFn := context.WithCancel(ctx)
 	defer cancelFn()
 
 	zipfile, err := a.fetchRemoteFile(ctx, file)
+	a.filesGCMu.Lock()
+	a.filesGC[file.ID] = file
+	a.filesGCMu.Unlock()
 	if err != nil {
-		return err
+		a.logger.Error("downloading file failed", "error", err)
+		return
 	}
 
-	return a.unzipZipfile(zipfile)
+	a.unzipCh <- zipfile
+}
+
+func (a *app) unzipFile(ctx context.Context, zipfile string) {
+	err := a.unzipZipfile(zipfile)
+	if err != nil {
+		a.logger.Error("unzipping file failed", "file", zipfile, "error", err)
+	}
 }
 
 func (a *app) downloadAll(ctx context.Context) {
@@ -50,10 +92,27 @@ func (a *app) downloadAll(ctx context.Context) {
 	}
 
 	for _, element := range list {
-		err := a.fetchAndUnzipFile(ctx, element)
-		if err != nil {
-			return
+		a.filesMu.Lock()
+		if _, ok := a.files[element.ID]; ok {
+			a.filesMu.Unlock()
+			continue
 		}
+
+		a.logger.Info("adding new file to queue", "file", element.Name, "ID", element.ID)
+		a.files[element.ID] = element
+		a.filesMu.Unlock()
+
+		a.downloadCh <- element
+	}
+
+	for element := range a.filesGC {
+		a.filesMu.Lock()
+		delete(a.files, element)
+		a.filesMu.Unlock()
+
+		a.filesGCMu.Lock()
+		delete(a.filesGC, element)
+		a.filesGCMu.Unlock()
 	}
 }
 
@@ -80,9 +139,23 @@ func main() {
 	interval, _ := time.ParseDuration(cfg.Interval)
 
 	a := app{
-		logger: logger,
-		conf:   *cfg,
-		client: putio,
+		conf:       *cfg,
+		logger:     logger,
+		client:     putio,
+		files:      map[int64]goputio.File{},
+		filesMu:    sync.Mutex{},
+		filesGC:    map[int64]goputio.File{},
+		filesGCMu:  sync.Mutex{},
+		downloadCh: make(chan goputio.File, 10),
+		unzipCh:    make(chan string, 2),
+	}
+
+	for n := 0; n < 2; n++ {
+		go a.runDownloadWorker(context.Background())
+	}
+
+	for n := 0; n < 1; n++ {
+		go a.runUnzipWorker(context.Background())
 	}
 
 	ticker := time.NewTimer(0)
